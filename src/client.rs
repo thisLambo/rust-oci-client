@@ -708,7 +708,27 @@ impl Client {
             }
         }
     }
-
+    /// Check if a blob exists on the remote OCI Distribution service.
+    ///
+    /// If the connection has already gone through authentication, this will
+    /// use the bearer token. Otherwise, this will attempt an anonymous pull.
+    pub async fn blob_exists(&self,
+                             image: &Reference,
+                             digest: String,
+                             auth: &RegistryAuth) -> Result<bool> {
+        self.store_auth_if_needed(image.resolve_registry(), auth)
+            .await;
+        let url = self.to_v2_blob_url(image, &digest);
+        debug!("HEAD blob from {}", url);
+        let res = RequestBuilderWrapper::from_client(self, |client| client.head(&url))
+            .apply_accept(MIME_TYPES_DISTRIBUTION_MANIFEST)?
+            .apply_auth(image, RegistryOperation::Pull)
+            .await?
+            .into_request_builder()
+            .send()
+            .await?;
+        Ok(res.status() != StatusCode::NOT_FOUND)
+    }
     /// Fetch a manifest's digest from the remote OCI Distribution service.
     ///
     /// If the connection has already gone through authentication, this will
