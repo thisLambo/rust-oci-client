@@ -712,10 +712,12 @@ impl Client {
     ///
     /// If the connection has already gone through authentication, this will
     /// use the bearer token. Otherwise, this will attempt an anonymous pull.
-    pub async fn blob_exists(&self,
-                             image: &Reference,
-                             digest: String,
-                             auth: &RegistryAuth) -> Result<bool> {
+    pub async fn blob_exists(
+        &self,
+        image: &Reference,
+        digest: String,
+        auth: &RegistryAuth,
+    ) -> Result<bool> {
         self.store_auth_if_needed(image.resolve_registry(), auth)
             .await;
         let url = self.to_v2_blob_url(image, &digest);
@@ -1062,7 +1064,7 @@ impl Client {
         layer: impl AsLayerDescriptor,
         mut out: T,
     ) -> Result<()> {
-        let response = self.pull_blob_response(image, &layer, None).await?;
+        let response = self.pull_blob_response(image, &layer, None, None).await?;
 
         let mut maybe_header_digester = digest_header_value(response.headers().clone())?
             .map(|digest| Digester::new(&digest).map(|d| (d, digest)))
@@ -1141,7 +1143,10 @@ impl Client {
         image: &Reference,
         layer: impl AsLayerDescriptor,
     ) -> Result<SizedStream> {
-        stream_from_response(self.pull_blob_response(image, &layer, None).await?, layer)
+        stream_from_response(
+            self.pull_blob_response(image, &layer, None, None).await?,
+            layer,
+        )
     }
 
     /// Stream a single layer from an OCI registry starting with a byte offset.
@@ -1153,8 +1158,11 @@ impl Client {
         image: &Reference,
         layer: impl AsLayerDescriptor,
         offset: u64,
+        end_offset: Option<u64>,
     ) -> Result<BlobResponse> {
-        let response = self.pull_blob_response(image, &layer, Some(offset)).await?;
+        let response = self
+            .pull_blob_response(image, &layer, Some(offset), end_offset)
+            .await?;
 
         let status = response.status();
         match status {
@@ -1176,6 +1184,7 @@ impl Client {
         image: &Reference,
         layer: impl AsLayerDescriptor,
         offset: Option<u64>,
+        end_offset: Option<u64>,
     ) -> Result<Response> {
         let layer = layer.as_layer_descriptor();
         let url = self.to_v2_blob_url(image, layer.digest);
@@ -1185,10 +1194,15 @@ impl Client {
             .apply_auth(image, RegistryOperation::Pull)
             .await?
             .into_request_builder();
+        let end_offset = if end_offset.is_some() {
+            end_offset.unwrap().to_string()
+        } else {
+            "".to_string()
+        };
         if let Some(offset) = offset {
             request = request.header(
                 RANGE,
-                HeaderValue::from_str(&format!("bytes={offset}-")).unwrap(),
+                HeaderValue::from_str(&format!("bytes={offset}-{end_offset}")).unwrap(),
             );
         }
         let mut response = request.send().await?;
@@ -1213,7 +1227,7 @@ impl Client {
                     if let Some(offset) = offset {
                         request = request.header(
                             RANGE,
-                            HeaderValue::from_str(&format!("bytes={offset}-")).unwrap(),
+                            HeaderValue::from_str(&format!("bytes={offset}-{end_offset}")).unwrap(),
                         );
                     }
                     response = request.send().await?
